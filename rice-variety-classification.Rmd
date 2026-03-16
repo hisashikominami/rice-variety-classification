@@ -1,0 +1,1504 @@
+---
+title: "Classification of Turkish Rice Varieties Using Statistical and Machine Learning Methods"
+author: "Hisashi Kominami"
+date: "`r format(Sys.Date(), '%Y-%m-%d')`"
+output: 
+  pdf_document:
+    latex_engine: xelatex
+    toc: true
+    number_sections: true
+fontsize: 11pt
+geometry: margin=1in
+urlcolor: blue
+header-includes:
+  - \usepackage{microtype}
+  - \usepackage{ragged2e}
+  - \usepackage{xurl}
+  - \usepackage{hyperref}
+  - \usepackage{float}
+  - \hypersetup{breaklinks=true}
+  - \urlstyle{same}
+  - \usepackage[font=small,labelfont=bf]{caption}
+  - \captionsetup[figure]{textfont=it}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE)
+
+# set seed for reproducibility.
+set.seed(7406)
+
+# install/load packages.
+pacman::p_load(tidyverse, ggplot2, GGally, tidymodels, rsample, parsnip, tune, doParallel, patchwork, car, caret, MASS, knitr, farff, rpart, rpart.plot, randomForest, gbm, e1071, kableExtra)
+
+kable_pdf <- function(x, caption = NULL) {
+  knitr::kable(x, caption = caption, booktabs = TRUE) |>
+    kableExtra::kable_styling(latex_options = c("hold_position", "scale_down"))
+}
+```
+
+```{r include=FALSE}
+# Import dataset.
+data <- readARFF("data/Rice_Cammeo_Osmancik.arff")
+df <- data %>%
+  mutate(Class = factor(ifelse(Class == "Cammeo", "Cammeo", "Osmancik")))
+  
+# Define the number of rows in the dataset.
+n <- nrow(data)
+  
+# Split 80/20 into training and testing datasets using the rsample function called initial_split().
+initial_split <- initial_split(data = data, prop = 0.8, strata = Class)
+train <- training(initial_split)
+test <- testing(initial_split)
+```
+
+```{r include=FALSE}
+# Exploratory Data Analysis
+dim(data)
+str(data)
+summary(data)
+```
+
+```{r include=FALSE}
+# Make a correlogram or correlation matrix to analyze the relationship between variables.
+ggpairs(data)
+```
+
+```{r include=FALSE}
+#  Create a scatterplot matrix for the quantitative predictor variables. 
+colnames(data) <- c("Area", "Peri", "Major", "Minor", "Eccent", "Conv", "Extent", "Class")
+ggscatmat(data = data, columns = 1:7, color = "Class", alpha = 0.6)
+colnames(data) <- c("Area", "Perimeter", "Major_Axis_Length", "Minor_Axis_Length", "Eccentricity", "Convex_Area", "Extent", "Class")
+```
+
+```{r include=FALSE}
+# Build a logistic regression model using all the available predictive variables.
+logistic_model_vif <- glm(Class ~ ., family = binomial(link = "logit"), data = train)
+
+# Use the contrasts function to identify the class labels for our binary response variable. :) in case you forget.
+# contrasts(data$Class)
+
+# Inspect variable inflation factors for the logistic regression model.
+vif_scores <- vif(logistic_model_vif)
+
+# Convert VIF scores to a data frame
+vif_df <- as.data.frame(vif_scores)
+
+# Print VIF scores as a nice table
+knitr::kable(vif_df, caption = "VIF Scores for Logistic Regression Model")
+```
+
+```{r include=FALSE}
+# Perform backward variable selection with AIC 
+logistic_model_backward <- stats::step(logistic_model_vif, direction = "backward", )
+summary(logistic_model_backward)
+# Note that the best model selected using backward variable selection includes only area, perimeter, eccentricity, and convex area on one particular run, but the choice of variables seems to change subtly. On the latest run area, perimeter, minor axis length, and convex area were selected.
+
+# Alternate approach to performing backward variable selection with BIC
+# logistic_model_backward2 <- stats::step(logistic_model_vif, direction = "backward", k = log(nrow(logistic_model_vif$data)))
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Define 10-fold cross-validation
+ctrl <- trainControl(method = "cv", number = 10)
+
+# Rebuild a logistic regression model using a subset of predictors identified above and perform 10-fold cross-validation on the training dataset.
+logistic_model_train <- train(Class ~ Area + Perimeter + Minor_Axis_Length + Convex_Area, 
+                        data = train,
+                        method = "glm",
+                        family = binomial(link = "logit"), 
+                        trControl = ctrl)
+
+# Save the 10-fold cross-validated accuracy and standard deviation.
+train_accuracy1 <- logistic_model_train$results$Accuracy
+train_accuracy1_sd <- sd(logistic_model_train$resample$Accuracy)
+
+# Predict on the training set
+prediction_logistic_train <- predict(logistic_model_train, newdata = train)
+
+# Predict on the test set
+prediction_logistic_test <- predict(logistic_model_train, newdata = test)
+
+# Confusion matrices for the training and testing datasets.
+confusion_logistic_train <- confusionMatrix(data = prediction_logistic_train, reference = train$Class)
+confusion_logistic_test <- confusionMatrix(data = prediction_logistic_test, reference = test$Class)
+
+# Save the accuracy on the test dataset.
+test_accuracy1 <- confusion_logistic_test[["overall"]][["Accuracy"]]
+```
+
+```{r include=FALSE}
+# Fit linear discriminant analysis model
+lda_fit <- lda(Class ~ Area + Perimeter + Minor_Axis_Length + Convex_Area, data = train)
+
+# Generate plots of the linear discriminants. It is evident from the plot of the stacked histograms that there is some overlap between the two rice varieties.
+plot(lda_fit)
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Build Linear Discriminant Analysis (LDA) model using tenfold cross-validation
+lda_model_train <- train(Class ~ Area + Perimeter + Minor_Axis_Length + Convex_Area,
+                   data = train,
+                   method = "lda",
+                   trControl = ctrl)
+
+# Print the trained LDA model
+print(lda_model_train)
+```
+
+```{r include=FALSE}
+# Save the 10-fold cross-validated training accuracy and standard deviation.
+train_accuracy2 <- lda_model_train$results$Accuracy
+train_accuracy2_sd <- sd(lda_model_train$resample$Accuracy)
+
+# Predict on the training set
+prediction_lda_train <- predict(lda_model_train, newdata = train)
+
+# Predict on the test set
+prediction_lda_test <- predict(lda_model_train, newdata = test)
+
+# Confusion matrices for the training and testing datasets.
+confusion_lda_train <- confusionMatrix(data = prediction_lda_train, reference = train$Class)
+confusion_lda_test <- confusionMatrix(data = prediction_lda_test, reference = test$Class)
+
+# Save the accuracy on the test dataset.
+test_accuracy2 <- confusion_lda_test[["overall"]][["Accuracy"]]
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Build Quadratic Discriminant Analysis (QDA) model using tenfold cross-validation
+qda_model_train <- train(Class ~ Area + Perimeter + Minor_Axis_Length + Convex_Area,
+                   data = train,
+                   method = "qda",
+                   trControl = ctrl)
+
+# Print the trained QDA model
+print(qda_model_train)
+```
+
+```{r include=FALSE}
+# Calculate training accuracy using 10-fold cross-validation and save the cross-validated accuracy and standard deviation.
+train_accuracy3 <- qda_model_train$results$Accuracy
+train_accuracy3_sd <- sd(qda_model_train$resample$Accuracy)
+
+# Predict on the training set
+prediction_qda_train <- predict(qda_model_train, newdata = train)
+
+# Predict on the test set
+prediction_qda_test <- predict(qda_model_train, newdata = test)
+
+# Confusion matrices for the training and testing datasets.
+confusion_qda_train <- confusionMatrix(data = prediction_qda_train, reference = train$Class)
+confusion_qda_test <- confusionMatrix(data = prediction_qda_test, reference = test$Class)
+
+# Save the accuracy on the test dataset. 
+test_accuracy3 <- confusion_qda_test[["overall"]][["Accuracy"]]
+```
+
+```{r include=FALSE}
+# It is possible to grow classification trees using two different approaches 1) Gini Impurity Index 
+# and 2) Cross-Entropy/Deviance. Set the complexity parameter (cp) to 0.0001 in order to grow a large tree (T0). Note: the default cp in rpart is 0.01,  which can be too large especially for larger datasets.
+tree <- rpart(Class ~ ., data = train, method = "class", parms = list(split = "gini"), control = rpart.control(cp=0.0001))
+
+# Inspect the printed version of each tree.
+tree
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Use the caret package to perform 10-fold cross validation.
+tree_train <- train(Class ~ ., 
+               data = train,
+               method = "rpart",
+               trControl = ctrl)
+tree_train
+
+# Caret identifies the optimal complexity parameter value using tenfold cross validation the final model can be extracted using the code below.
+tree_optimal <- tree_train$finalModel
+```
+
+```{r include=FALSE}
+# Visualize initial tree using several different approaches.
+# Approach 1: from supplemental R code
+# print(tree)
+# post(tree, filename = "")
+
+# Approach 2: from practical statistics textbook
+# plot(tree, uniform = TRUE, margin = 0.05)
+# text(tree)
+
+# Approach 3: using prp()
+# prp(tree,
+#     main = "Decision Tree for Rice Variety Dataset",
+#     faclen = 0, # use full names for factor labels
+#     extra = 2, # display a number of observations for each terminal node
+#     roundint = FALSE, # don't round to integers in output
+#     digits = 5) # display five decimal places and output
+
+# Approach 4: using rpart.plot()
+# Note: The vignette includes useful information for modifying plots. chrome-extension://efaidnbmnnnibpcajpcglclefindmkaj/http://www.milbo.org/rpart-plot/prp.pdf
+rpart.plot(tree, main = "Initial Decision Tree for the Rice Variety Dataset")
+```
+
+```{r include=FALSE}
+# Inspect extended summary of each tree using the summary function.
+# summary(tree).
+```
+
+```{r include=FALSE}
+# Inspect the complexity parameter table and other model summary outputs.
+# printcp(tree)
+```
+
+```{r include=FALSE}
+# Inspect the complexity parameter table using plotcp()   
+plotcp(tree)
+```
+
+```{r include=FALSE}
+# Identify the best number of splits that produces the best cross validated prediction error. In this case, we're looking for the lowest value in the "xerror" column and the corresponding number in the "nsplit" column.
+best <- which.min(tree$cptable[,"xerror"])
+
+cp1 <- tree$cptable[best, "CP"]
+
+# Note:  Since the results for the two trees was so similar, moving forward I will only use result for the first tree using the Gini impurity index.
+```
+
+```{r include=FALSE}
+# Prune the original tree (T0) back using the optimal complexity parameter value.
+tree_pruned <- prune(tree, cp = cp1)
+```
+
+```{r include=FALSE}
+# Plot the optimal decision tree found using cross validation. Note: Both tree_pruned and tree_optimal produce the same results and plot initially, however, repeating the code several times produces different results.
+rpart.plot(tree_pruned, main = "Optimal Decision Tree for the Rice Variety Dataset")
+
+rpart.plot(tree_optimal, main = "Optimal Decision Tree for the Rice Variety Dataset")
+```
+
+```{r include=FALSE}
+# Calculate training accuracy using 10-fold cross-validation and save the cross-validated accuracy and standard deviation.
+train_accuracy4 <- mean(tree_train$resample$Accuracy)
+train_accuracy4_sd <- tree_train$results$AccuracySD[1]
+
+# Make predictions on the training dataset.
+prediction_tree_train <- predict(tree_optimal, train[,-8], type = "class")
+
+# Make predictions once on the test dataset.
+prediction_tree_test <- predict(tree_optimal, test[,-8], type = "class")
+
+# Note: It appears we get the same results whether we use the Gini impurity index
+# for the cross-entropy/deviance
+
+# Confusion Matrices for training and testing dataset predictions.
+confusion_tree_train <- confusionMatrix(data = prediction_tree_train, reference = train$Class)
+confusion_tree_test <- confusionMatrix(data = prediction_tree_test, reference = test$Class)
+
+# save the accuracy on the test dataset.
+test_accuracy4 <- confusion_tree_test[["overall"]][["Accuracy"]]
+```
+
+```{r include=FALSE}
+# Build random forest model with default parameters for mtry = sqrt(predictors) and nodesize = 1 (i.e., the minimum size of the terminal node). The default for ntree = 500, however, here I use two thousand instead.
+random_forest_model <- randomForest(Class ~ ., data = train, ntree = 2000, importance = TRUE)
+```
+
+```{r include=FALSE}
+# Make predictions using the training data.
+prediction_rf_train <- predict(random_forest_model, train, type = "class") 
+
+# Make predictions using the test data.
+prediction_rf_test <- predict(random_forest_model, test, type = "class")
+
+# Create confusion matrices.
+confusionMatrix(data = prediction_rf_train, reference = train$Class)
+confusionMatrix(data = prediction_rf_test, reference = test$Class)
+
+# Alternate approach to creating a confusion matrix.
+# table(prediction_rf_test, test$Class)
+```
+
+```{r include=FALSE}
+rf_results <- cbind(prediction_rf_test, test$Class)
+```
+
+```{r include=FALSE}
+randomForest::importance(random_forest_model, type = 1)
+randomForest::importance(random_forest_model, type = 2)
+varImpPlot(random_forest_model, main = "Variable Importance for the Large Random Forest Model")
+```
+
+```{r include=FALSE}
+random_forest_error_rate <- data.frame(error_rate = random_forest_model$err.rate[,'OOB'],
+                                       num_trees = 1:random_forest_model$ntree)
+
+ggplot(random_forest_error_rate, aes(x = num_trees, y = error_rate)) +
+  geom_line()
+```
+
+```{r include=FALSE}
+# Tidy model implementation of random forest and hyperparameter tuning exploring all possible options for mtry, min_n, and trees. In this particular implementation bootstrap samples were generated thirty times on the entire dataset.
+set.seed(7406)
+# rice_boot <- bootstraps(data, times = 30) # Bootstrap resampling.
+rice_cross_validation <- vfold_cv(data = train, v = 10)
+
+random_forest_specification_train <- rand_forest(mode = "classification",
+                                           mtry = tune(),
+                                           trees = tune(),
+                                           min_n = tune(),
+                                           engine = "ranger")
+
+random_forest_grid_train <- tune_grid(workflow(Class ~ ., random_forest_specification_train), resamples = rice_cross_validation)
+```
+
+```{r include=FALSE}
+# Use functions in the tune package to see how random forest models performed in tenfold cross validation.
+random_forest_grid_train %>%
+  collect_metrics()
+
+random_forest_grid_train %>%
+  show_best(metric = "roc_auc")
+
+random_forest_grid_train %>%
+  show_best(metric = "accuracy")
+
+random_forest_grid_train %>%
+  select_best(metric = "accuracy")
+```
+
+```{r include=FALSE}
+# Get the mean accuracy and standard deviation values from tenfold cross validation.
+random_forest_df <- random_forest_grid_train %>%
+  show_best(metric = "accuracy")
+
+train_accuracy5 <- random_forest_df$mean[1]
+train_accuracy5_sd <- random_forest_df$std_err[1]
+```
+
+```{r include=FALSE}
+# Build random forest model with optimal hyperparameters. ntree = 1191, mtry = 4, and nodesize = 27 (i.e., the minimum size of the terminal node)
+random_forest_best <- randomForest(Class ~ ., data = train, ntree = 1191, mtry = 4, nodesize = 27, proximity = TRUE, importance = TRUE)
+```
+
+```{r include=FALSE}
+# Make predictions using the training data and calculate the training accuracy.
+prediction_rf_best_train <- predict(random_forest_best, train, type = "class") 
+
+# Make predictions using the test data and calculate the testing accuracy.
+prediction_rf_best_test <- predict(random_forest_best, test, type = "class")
+test_accuracy5 <- mean(prediction_rf_best_test == test$Class)
+
+# Create confusion matrices.
+confusion_forest_train <- confusionMatrix(data = prediction_rf_best_train, reference = train$Class)
+confusion_forest_test <- confusionMatrix(data = prediction_rf_best_test, reference = test$Class)
+```
+
+```{r include=FALSE}
+# Set up model specification using tidy models implementation. (https://juliasilge.com/blog/xgboost-tune-volleyball/)
+boosted_specification <- boost_tree(
+  trees = 2000,
+  tree_depth = tune(),
+  min_n = tune(),                                        ## first three: model complexity
+  sample_size = tune(),
+  mtry = tune(),                                         
+  learn_rate = tune()                                    ## step size
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+boosted_specification
+```
+
+```{r include=FALSE}
+# Set up hyperparameter search grid
+boosted_grid <- grid_latin_hypercube(
+  tree_depth(),
+  min_n(),
+  sample_size = sample_prop(),
+  finalize(mtry(), train),
+  learn_rate(),
+  size = 30
+)
+
+boosted_grid
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Put the model specification into a workflow.
+boosted_workflow <- workflow() %>%
+  add_formula(Class ~ .) %>%
+  add_model(boosted_specification)
+
+boosted_workflow
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Create cross validation resamples for tuning our model.
+rice_folds <- vfold_cv(train, strata = Class)
+rice_folds
+```
+
+```{r include=FALSE}
+doParallel::registerDoParallel()
+
+# set seed for reproducibility.
+set.seed(7406)
+
+boosted_results <- tune_grid(
+  boosted_workflow,
+  resamples = rice_folds,
+  grid = boosted_grid,
+  control = control_grid(save_pred = TRUE)
+)
+
+boosted_results
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Explore the metrics for all these models.
+boosted_results_df <- collect_metrics(boosted_results)
+boosted_results_df
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406) 
+
+# Create visualization to better understand the results.
+boosted_results %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  dplyr::select(mean, mtry:sample_size) %>%
+  pivot_longer(mtry:sample_size,
+               values_to = "value",
+               names_to = "parameter"
+  ) %>%
+  ggplot(aes(value, mean, color = parameter)) +
+  geom_point(alpha = 0.8, show.legend = FALSE) +
+  facet_wrap(~parameter, scales = "free_x") +
+  labs(x = NULL, y = "Accuracy")
+```
+
+```{r include=FALSE}
+# Return the best performing sets of parameters.
+show_best(boosted_results, metric = "accuracy")
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Select the best set of parameters.
+boosted_best <- select_best(boosted_results, metric = "accuracy")
+boosted_best
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+#  Finalize our tunable workflow using these parameter values.
+boosted_fit <- finalize_workflow(
+  boosted_workflow,
+  boosted_best
+)
+
+boosted_fit
+```
+
+```{r include=FALSE}
+#  Visualize the most important parameters.
+library(vip)
+
+boosted_fit %>%
+  fit(data = train) %>%
+  extract_fit_parsnip() %>%
+  vip(geom = "point") +
+  ggtitle("Variable Importance Plot for XGBoost Model")
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Use the last_fit() function to fit a final model to the training set and evaluate the test dataset.
+boosted_fit_results <- last_fit(boosted_fit, initial_split)
+
+collect_metrics(boosted_fit_results)
+boosted_fit_results_df <- collect_predictions(boosted_fit_results) 
+
+# Calculate the test error.
+test_accuracy6 <- mean(boosted_fit_results_df$.pred_class == boosted_fit_results_df$Class)
+```
+
+```{r include=FALSE}
+# set seed for reproducibility.
+set.seed(7406)
+
+# Set up model specification using tidy models implementation. Manually include the specs for the best boosted tree so we can calculate the training error. (https://juliasilge.com/blog/xgboost-tune-volleyball/)
+boosted_specification2 <- boost_tree(
+  mtry = 6,
+  trees = 2000,
+  min_n = 24,
+  tree_depth = 2,
+  learn_rate = 0.001729854,
+  sample_size = 0.8875741
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+  
+#  create the model fit object
+boosted_fit2 <- boosted_specification2 %>% fit(Class ~ ., data = train)
+
+#  calculate the training error.
+prediction_boosted_train <- predict(boosted_fit2, train)
+train_accuracy6 <- mean(prediction_boosted_train$.pred_class == train$Class)
+```
+
+```{r include=FALSE}
+# Confusion matrices for the training and testing datasets.
+confusion_boost_train <- confusionMatrix(data = prediction_boosted_train$.pred_class, reference = train$Class)
+confusion_boost_test <- confusionMatrix(data = boosted_fit_results_df$.pred_class, reference = test$Class)
+```
+
+```{r include=FALSE}
+# Build initial support vector machine using a linear kernel. scale = TRUE because we have some predictor variables that are on a very small scale and other variables that are on a very large scale. subset = initial_split$in_id Specifies the indices or row numbers that correspond to the training dataset.
+svm_model <- svm(Class~., data = data, subset = initial_split$in_id, kernel = "linear", cost = 10, scale = TRUE)
+```
+
+```{r include=FALSE}
+# Set seed for reproducibility.
+set.seed(7406)
+
+# Perform 10-fold cross validation using the tune() function in the e1071 library. Select a range of cost values for hyperparameter tuning.
+svm_model_tune <- tune(svm, Class ~ ., data = train, kernel = "linear", 
+                       ranges = list(cost = c(0.001, 0.01, 0.1, 5, 10, 100)))
+summary(svm_model_tune)
+
+# Visually inspect cost parameter value that minimizes error.
+plot(svm_model_tune)
+```
+
+```{r include=FALSE}
+#  store the best model obtained from 10-fold cross validation.
+svm_model_best <- svm_model_tune$best.model
+summary(svm_model_best)
+```
+
+```{r include=FALSE}
+# Build final support vector machine using a linear kernel. scale = TRUE because we have some predictor variables that are on a very small scale and other variables that are on a very large scale. cross = 10 indicates that we're doing 10-fold cross validation.
+svm_model_train <- svm(Class~., data = train, kernel = "linear", cost = 5, scale = TRUE, cross = 10)
+
+# Extract the 10-fold cross-validated accuracies and standard deviation of accuracies
+train_accuracy7 <- mean(svm_model_train$accuracies)/100
+train_accuracy7_sd <- sd(svm_model_train$accuracies)/100
+
+# Make predictions on the train and test dataset.
+prediction_svm_train <- predict(svm_model_train, train)
+prediction_svm_test <- predict(svm_model_train, test)
+
+# Confusion matrices for the training and testing datasets.
+confusion_svm_train <- confusionMatrix(data = prediction_svm_train, reference = train$Class)
+confusion_svm_test <- confusionMatrix(data = prediction_svm_test, reference = test$Class)
+
+# Save the accuracy on the test dataset. 
+test_accuracy7 <- confusion_svm_test[["overall"]][["Accuracy"]]
+```
+
+```{r include=FALSE}
+# Create a data frame with model names and accuracy values
+accuracy_table <- data.frame(
+  Model = c("Logistic Regression",
+            "Linear Discriminant Analysis",
+            "Quadratic Discriminant Analysis",
+            "Decision Tree",
+            "Random Forest",
+            "XGBoost",
+            "Support Vector Machine"),
+  cv_accuracy = c(train_accuracy1, train_accuracy2, train_accuracy3,
+                  train_accuracy4, train_accuracy5, train_accuracy6, train_accuracy7),  
+  test_accuracy = c(test_accuracy1, test_accuracy2, test_accuracy3,
+                    test_accuracy4, test_accuracy5, test_accuracy6, test_accuracy7)
+)
+
+# Create a column showing the difference between test and cross-validated accuracy
+accuracy_table$test_minus_cv <- accuracy_table$test_accuracy - accuracy_table$cv_accuracy
+
+# Round numeric columns
+accuracy_table[, 2:4] <- round(accuracy_table[, 2:4], digits = 4)
+
+# Display table
+kable(
+  accuracy_table,
+  caption = "Comparison of cross-validated training accuracy and independent test accuracy across classification models",
+  col.names = c(
+    "Model",
+    "10-Fold CV Accuracy",
+    "Test Accuracy",
+    "Test − CV Difference"
+  )
+)
+```
+
+```{r include=FALSE}
+# Initialize the accuracy values for all models in all B loops.
+B = 100
+train_accuracy_all <- NULL
+test_accuracy_all <- NULL
+
+for(b in 1:B){
+  #  Randomly select eighty percent (3048) of the observations at the new training subset
+  flag <- sort(sample(1:n, 3048))
+  train_temp <- data[flag,]
+  test_temp <- data[-flag,]
+
+  train_accuracy_temp <- NULL
+  test_accuracy_temp <- NULL
+  
+  # Logistic Regression
+  logistic_model_temp <- glm(Class ~ Area + Perimeter + Minor_Axis_Length + Convex_Area, 
+                             family = binomial(link = "logit"), 
+                             data = train_temp)
+  
+  # Predict on the training set
+  prediction_logistic_train_temp <- predict.glm(logistic_model_temp, newdata = train_temp, type = "response")
+  train_accuracy_temp <- mean(ifelse(prediction_logistic_train_temp > 0.5, "Osmancik", "Cammeo") == train_temp$Class)
+  
+  # Predict on the test set
+  prediction_logistic_test_temp <- predict.glm(logistic_model_temp, newdata = test_temp, type = "response")
+  test_accuracy_temp <- mean(ifelse(prediction_logistic_test_temp > 0.5, "Osmancik", "Cammeo") == test_temp$Class)
+  
+  # Linear Discriminant Analysis
+  lda_model_temp <- lda(Class ~ Area + Perimeter + Minor_Axis_Length + Convex_Area, data = train_temp)
+  
+  # Predict on the training set
+  prediction_lda_train_temp <- predict(lda_model_temp, newdata = train_temp)$class
+  train_accuracy_temp <- cbind(train_accuracy_temp, mean(prediction_lda_train_temp == train_temp$Class))
+  
+  # Predict on the test set
+  prediction_lda_test_temp <- predict(lda_model_temp, newdata = test_temp)$class
+  test_accuracy_temp <- cbind(test_accuracy_temp, mean(prediction_lda_test_temp == test_temp$Class))
+
+  # Quadratic Discriminant Analysis
+  qda_model_temp <- qda(Class ~ Area + Perimeter + Minor_Axis_Length + Convex_Area, data = train_temp)
+  
+  # Predict on the training set
+  prediction_qda_train_temp <- predict(qda_model_temp, newdata = train_temp)$class
+  train_accuracy_temp <- cbind(train_accuracy_temp, mean(prediction_qda_train_temp == train_temp$Class))
+  
+  # Predict on the test set
+  prediction_qda_test_temp <- predict(qda_model_temp, newdata = test_temp)$class
+  test_accuracy_temp <- cbind(test_accuracy_temp, mean(prediction_qda_test_temp == test_temp$Class))  
+  
+  # Support Vector Machine
+  svm_model_temp <- svm(Class ~ ., data = train_temp, kernel = "linear", cost = 5, scale = TRUE)
+  
+  # Predict on the training set
+  prediction_svm_train_temp <- predict(svm_model_temp, newdata = train_temp)
+  train_accuracy_temp <- cbind(train_accuracy_temp, mean(prediction_svm_train_temp == train_temp$Class))
+  
+  # Predict on the test set
+  prediction_svm_test_temp <- predict(svm_model_temp, newdata = test_temp)
+  test_accuracy_temp <- cbind(test_accuracy_temp, mean(prediction_svm_test_temp == test_temp$Class)) 
+  
+  # The final step in which the temporary training and test accuracy values are put in a new row
+  train_accuracy_all <- rbind(train_accuracy_all, train_accuracy_temp)
+  test_accuracy_all <- rbind(test_accuracy_all, test_accuracy_temp)
+  
+}
+
+colnames(train_accuracy_all) <- c("Logistic Regression", 
+                                  "Linear Discriminant Analysis", 
+                                  "Quadratic Discriminant Analysis", 
+                                  "Support Vector Machine")
+colnames(test_accuracy_all) <- c("Logistic Regression", 
+                                 "Linear Discriminant Analysis", 
+                                 "Quadratic Discriminant Analysis", 
+                                 "Support Vector Machine")
+
+apply(train_accuracy_all, 2, mean)
+apply(train_accuracy_all, 2, var)
+
+apply(test_accuracy_all, 2, mean)
+apply(test_accuracy_all, 2, var)
+
+
+train_accuracy_all_long <- data.frame(train_accuracy_all) %>% pivot_longer(
+  cols = c("Logistic.Regression", "Linear.Discriminant.Analysis", "Quadratic.Discriminant.Analysis", "Support.Vector.Machine"),
+  names_to = "model",
+  values_to = "accuracy")
+
+test_accuracy_all_long <- data.frame(test_accuracy_all) %>% pivot_longer(
+  cols = c("Logistic.Regression", "Linear.Discriminant.Analysis", "Quadratic.Discriminant.Analysis", "Support.Vector.Machine"),
+  names_to = "model",
+  values_to = "accuracy")
+
+ggplot(train_accuracy_all_long, aes(x=model, y=accuracy)) +
+  geom_boxplot() +
+  stat_summary(fun = mean, geom = "point", shape = 19, size = 2, color = "red") +
+  labs(x="Model", y="Accuracy")
+
+ggplot(test_accuracy_all_long, aes(x=model, y=accuracy)) +
+  geom_boxplot() +
+  stat_summary(fun = mean, geom = "point", shape = 19, size = 2, color = "red") +
+  labs(x="Model", y="Accuracy")  
+```
+
+```{r include=FALSE}
+# Combine training and test accuracy data into one data frame
+accuracy_all_long <- rbind(transform(train_accuracy_all_long, dataset = "Train"),
+                           transform(test_accuracy_all_long, dataset = "Test"))
+
+# Plot box plots for training and test accuracy side by side
+ggplot(accuracy_all_long, aes(x = model, y = accuracy, fill = dataset)) +
+  geom_boxplot(position = "dodge") +
+  stat_summary(fun = mean, geom = "point", shape = 19, size = 2, color = "red", position = position_dodge(width = 0.75)) +
+  labs(x = "Model", y = "Accuracy", title = "Monte Carlo Cross-Validated Performance (100 Iterations)") +
+  scale_fill_manual(values = c("Train" = "blue", "Test" = "orange")) +  # Adjust fill colors
+  scale_x_discrete(labels = c("lda" = "LDA", "lr" = "LR", "qda" = "QDA", "svm" = "SVM")) +  # Abbreviate x-axis labels
+  theme(axis.text.x = element_text(size = 10, angle = 45, hjust = 1))  # Adjust font size and angle of x-axis labels
+```
+
+```{r include=FALSE}
+# Perform a paired t test to evaluate whether the mean accuracy is statistically different across models.
+t_test1 <- t.test(test_accuracy_all[,1], test_accuracy_all[,2], paired = TRUE)
+t_test2 <- t.test(test_accuracy_all[,1], test_accuracy_all[,3], paired = TRUE)
+t_test3 <- t.test(test_accuracy_all[,1], test_accuracy_all[,4], paired = TRUE)
+t_test4 <- t.test(test_accuracy_all[,2], test_accuracy_all[,3], paired = TRUE)
+t_test5 <- t.test(test_accuracy_all[,2], test_accuracy_all[,4], paired = TRUE)
+t_test6 <- t.test(test_accuracy_all[,3], test_accuracy_all[,4], paired = TRUE)
+
+# Extract the p-values from the statistical tests.
+t_test1_pvalue <- round(t_test1[["p.value"]], digits = 4)
+t_test2_pvalue <- round(t_test2[["p.value"]], digits = 4)
+t_test3_pvalue <- round(t_test3[["p.value"]], digits = 4)
+t_test4_pvalue <- round(t_test4[["p.value"]], digits = 4)
+t_test5_pvalue <- round(t_test5[["p.value"]], digits = 4)
+t_test6_pvalue <- round(t_test6[["p.value"]], digits = 4)
+
+# Create a summary table of the statistical test p-values
+t_test_table <- data.frame(
+  comparison = c("LR-LDA", "LR-QDA", "LR-SVM", "LDA-QDA", "LDA-SVM", "QDA-SVM"),
+  pvalue = c(t_test1_pvalue, t_test2_pvalue, t_test3_pvalue, t_test4_pvalue, t_test5_pvalue, t_test6_pvalue)
+)
+
+# Display the p-value table nicely using kable function with modified column names
+kable(t_test_table, caption = "Paired T Test p-Values Comparing Mean Accuracy",
+      col.names = c("Model Comparison", "p-Value"))
+```
+
+```{r include=FALSE}
+# Create summary table of model performance on test dataset.
+results_final_table <- data.frame(
+  Model = c("Logistic Regression",
+            "Linear Discriminant Analysis",
+            "Quadratic Discriminant Analysis",
+            "Decision Tree",
+            "Random Forest",
+            "XGBoost",
+            "Support Vector Machine"),
+  accuracy_balanced = c(confusion_logistic_test[["byClass"]][["Balanced Accuracy"]], 
+                        confusion_lda_test[["byClass"]][["Balanced Accuracy"]], 
+                        confusion_qda_test[["byClass"]][["Balanced Accuracy"]], 
+                        confusion_tree_test[["byClass"]][["Balanced Accuracy"]], 
+                        confusion_forest_test[["byClass"]][["Balanced Accuracy"]],
+                        confusion_boost_test[["byClass"]][["Balanced Accuracy"]],
+                        confusion_svm_test[["byClass"]][["Balanced Accuracy"]]),
+  accuracy = c(confusion_logistic_test[["overall"]][["Accuracy"]], 
+               confusion_lda_test[["overall"]][["Accuracy"]], 
+               confusion_qda_test[["overall"]][["Accuracy"]], 
+               confusion_tree_test[["overall"]][["Accuracy"]], 
+               confusion_forest_test[["overall"]][["Accuracy"]],
+               confusion_boost_test[["overall"]][["Accuracy"]],
+               confusion_svm_test[["overall"]][["Accuracy"]]),
+  sensitivity = c(confusion_logistic_test[["byClass"]][["Sensitivity"]], 
+                  confusion_lda_test[["byClass"]][["Sensitivity"]], 
+                  confusion_qda_test[["byClass"]][["Sensitivity"]], 
+                  confusion_tree_test[["byClass"]][["Sensitivity"]], 
+                  confusion_forest_test[["byClass"]][["Sensitivity"]],
+                  confusion_boost_test[["byClass"]][["Sensitivity"]],
+                  confusion_svm_test[["byClass"]][["Sensitivity"]]),
+  specificity = c(confusion_logistic_test[["byClass"]][["Specificity"]], 
+                  confusion_lda_test[["byClass"]][["Specificity"]], 
+                  confusion_qda_test[["byClass"]][["Specificity"]], 
+                  confusion_tree_test[["byClass"]][["Specificity"]], 
+                  confusion_forest_test[["byClass"]][["Specificity"]],
+                  confusion_boost_test[["byClass"]][["Specificity"]],
+                  confusion_svm_test[["byClass"]][["Specificity"]]),
+  precision = c(confusion_logistic_test[["byClass"]][["Precision"]], 
+                confusion_lda_test[["byClass"]][["Precision"]], 
+                confusion_qda_test[["byClass"]][["Precision"]], 
+                confusion_tree_test[["byClass"]][["Precision"]], 
+                confusion_forest_test[["byClass"]][["Precision"]],
+                confusion_boost_test[["byClass"]][["Precision"]],
+                confusion_svm_test[["byClass"]][["Precision"]]),
+  F1 = c(confusion_logistic_test[["byClass"]][["F1"]], 
+         confusion_lda_test[["byClass"]][["F1"]], 
+         confusion_qda_test[["byClass"]][["F1"]], 
+         confusion_tree_test[["byClass"]][["F1"]], 
+         confusion_forest_test[["byClass"]][["F1"]],
+         confusion_boost_test[["byClass"]][["F1"]],
+         confusion_svm_test[["byClass"]][["F1"]]))
+
+# Round numeric columns to four digits
+results_final_table[, 2:7] <- round(results_final_table[, 2:7], digits = 4)
+
+# Display the accuracy table nicely using kable function with modified column names
+kable(results_final_table, caption = "Classification Model Performance on Test Dataset",
+      col.names = c("Model", "Balanced Accuracy", "Accuracy", "Sensitivity", "Specificity", "Precision", "F1 Score"))
+```
+
+```{r include=FALSE}
+# Combine confusion matrices into a list
+confusion_matrices <- list(
+  Logistic_Regression = confusion_logistic_test[["table"]],
+  Linear_Discriminant_Analysis = confusion_lda_test[["table"]],
+  Quadratic_Discriminant_Analysis = confusion_qda_test[["table"]],
+  Decision_Tree = confusion_tree_test[["table"]],
+  Random_Forest = confusion_forest_test[["table"]],
+  XGBoost = confusion_boost_test[["table"]],
+  Support_Vector_Machine = confusion_svm_test[["table"]]
+)
+
+# Convert list of confusion matrices to a single data frame
+confusion_df <- do.call(rbind, lapply(names(confusion_matrices), function(model_name) {
+  matrix_df <- as.data.frame(confusion_matrices[[model_name]])
+  matrix_df$Model <- model_name
+  return(matrix_df)
+}))
+
+# Create a formatted table
+kable(confusion_df, caption = "Confusion Matrices for Different Models")
+```
+## Abstract
+
+\justifying
+
+This study evaluates whether Quadratic Discriminant Analysis (QDA) performs competitively with common machine learning classifiers when distinguishing between two Turkish rice varieties (Cammeo and Osmancik). Previous studies reported high classification accuracy using methods such as logistic regression, support vector machines, and random forests but did not evaluate QDA. Using a dataset of 3,810 observations with seven morphological predictors, models were compared using 10-fold cross-validation, test set evaluation, and Monte Carlo cross-validation. Results indicate that although QDA performed competitively in terms of accuracy, statistical tests revealed slightly lower mean accuracy compared with logistic regression, linear discriminant analysis, and support vector machines. Overall, the analysis demonstrates that multiple models achieve very similar performance on this dataset and highlights the importance of statistical comparison when evaluating classification models.
+
+## Introduction
+
+Rice is a cornerstone of global food security, serving as a primary staple food for more than half of the world’s population. It contributes substantially to global dietary intake, accounting for over 21% of caloric consumption worldwide and up to 76% in parts of Southeast Asia. Rice production has also grown steadily from 1994 to 2019, highlighting its continuing importance as a global staple crop [1].
+
+After harvesting, rice undergoes several processing steps before reaching the consumer. These typically include coarse and fine material removal, preliminary cleaning, husk and stone extraction, polishing, and optical color sorting. Each step relies on specialized industrial equipment designed to ensure both product quality and processing efficiency.
+
+In modern rice processing facilities, optical sorting systems play an important role in classifying grains according to color, shape, and size in order to meet quality standards. Machine learning methods have increasingly been integrated into these systems to improve classification accuracy and sorting efficiency across a range of agricultural applications, including identifying ripeness, spoilage, grain damage, and varietal differences.
+
+Recent studies have applied several machine learning approaches to the Turkish rice variety dataset, reporting cross-validated classification accuracies ranging from 88.58% to 93.53% [2–4]. However, none of these studies evaluated QDA as a candidate classifier. According to *An Introduction to Statistical Learning with Applications in R*, when predictor variables are approximately normally distributed within each class and sample sizes are relatively small, linear discriminant analysis and QDA may outperform logistic regression [5]. Because logistic regression was among the top-performing models in prior studies, this observation suggests that QDA may perform competitively on this dataset.
+
+In addition, prior studies primarily relied on 5-fold or 10-fold cross-validation to assess model performance. While these approaches provide useful estimates of predictive accuracy, the results were not accompanied by visual comparisons or statistical assessments of whether observed differences between models were meaningful. To address this limitation, this study employs Monte Carlo cross-validation with 100 iterations, providing a more comprehensive and statistically informative comparison of classification performance.
+
+## Problem
+
+Accurate identification of rice varieties is important for quality control, grading, and processing throughout the agricultural supply chain. Machine learning methods have increasingly been used for this task using morphological measurements extracted from images of rice grains.
+
+## Study Objectives
+
+This study investigates whether QDA performs competitively with commonly used classification methods for distinguishing between two Turkish rice varieties. Specifically, model performance is compared using cross-validation, independent test set evaluation, and Monte Carlo cross-validation to assess whether differences in predictive accuracy are meaningful.
+
+## Data
+
+The analysis uses a dataset from the **UCI Machine Learning Repository** containing 3,810 observations of two rice varieties—Cammeo and Osmancik—with seven continuous predictors describing grain morphology [6].
+
+## Exploratory Data Analysis
+
+Exploratory data analysis (EDA) revealed a modest class imbalance in the response variable with 2,180 observations classified as Osmancik (57.2%) and 1,630 classified as Cammeo (42.8%). The predictor variables represent morphological characteristics derived from image-processed rice grains and are summarized in Table 1.
+
+**Table 1.** Description of rice grain morphological features.
+
+|   Predictor       |   Description                                                                       |
+|--------------------------|----------------------------------------------|
+| Area              | The number of pixels within the boundary of the rice grain image                    |
+| Perimeter         | The calculated circumference of the rice grain                                      |
+| Major Axis Length | The longest line that can be drawn on the rice grain                                |
+| Minor Axis Length | The shortest line that can be drawn on the rice grain                               |
+| Eccentricity      | A measure of how round the ellipse is                                               |
+| Convex Area       | The pixel count of the smallest convex shell of the region formed by the rice grain |
+| Extent            | The ratio of the region formed by the rice grain to the bounding box pixels         |
+
+As expected, many of the rice grain morphological features (except Extent) had bell-shaped distributions shown below in Figures 1 and 2.
+```{r echo=FALSE, fig.align='center', fig.width=7, fig.height=8, fig.pos='H', fig.cap="Boxplots comparing the distributions of seven morphological predictors across the Cammeo and Osmancik rice varieties."}
+# Common theme for all plots
+eda_theme <- theme_bw(base_size = 10) +
+  theme(
+    panel.grid.minor = element_blank(),
+    panel.grid.major.x = element_blank(),
+    legend.position = "none",
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(size = 8),
+    axis.text.y = element_text(size = 8)
+  )
+
+# Common boxplot layers
+boxplot_geom <- geom_boxplot(alpha = 0.5, width = 0.6, outlier.size = 0.7)
+boxplot_fill <- scale_fill_manual(values = c("Cammeo" = "#0072B2", "Osmancik" = "#D55E00"))
+
+# Top row: suppress x-axis text
+p1 <- ggplot(data, aes(x = Class, y = Area, fill = Class)) +
+  boxplot_geom +
+  boxplot_fill +
+  labs(y = "Area") +
+  eda_theme +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+p2 <- ggplot(data, aes(x = Class, y = Perimeter, fill = Class)) +
+  boxplot_geom +
+  boxplot_fill +
+  labs(y = "Perimeter") +
+  eda_theme +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+p3 <- ggplot(data, aes(x = Class, y = Major_Axis_Length, fill = Class)) +
+  boxplot_geom +
+  boxplot_fill +
+  labs(y = "Major Axis Length") +
+  eda_theme +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+# Middle row: suppress x-axis text
+p4 <- ggplot(data, aes(x = Class, y = Minor_Axis_Length, fill = Class)) +
+  boxplot_geom +
+  boxplot_fill +
+  labs(y = "Minor Axis Length") +
+  eda_theme +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+p5 <- ggplot(data, aes(x = Class, y = Eccentricity, fill = Class)) +
+  boxplot_geom +
+  boxplot_fill +
+  labs(y = "Eccentricity") +
+  eda_theme +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+p6 <- ggplot(data, aes(x = Class, y = Convex_Area, fill = Class)) +
+  boxplot_geom +
+  boxplot_fill +
+  labs(y = "Convex Area") +
+  eda_theme +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank())
+
+# Bottom row: keep x-axis text
+p7 <- ggplot(data, aes(x = Class, y = Extent, fill = Class)) +
+  boxplot_geom +
+  boxplot_fill +
+  labs(y = "Extent") +
+  eda_theme
+
+# Combine plots
+(p1 + p2 + p3) / 
+(p4 + p5 + p6) /
+p7
+```
+
+```{r echo=FALSE, fig.align='center', fig.cap="Scatterplot matrix of morphological features for the Cammeo and Osmancik rice varieties. Pairwise relationships, marginal distributions, and correlation coefficients are shown to illustrate the strong linear relationships among several grain geometry predictors.", fig.width=7, fig.height=7, fig.pos='H'}
+# Create display dataset with shorter variable names
+display_df <- data %>%
+  rename(
+    Perim = Perimeter,
+    Major = Major_Axis_Length,
+    Minor = Minor_Axis_Length,
+    Eccen = Eccentricity,
+    Convex = Convex_Area
+  )
+
+# Scatterplot matrix
+ggpairs(
+  display_df,
+  columns = 1:7,
+  mapping = aes(color = Class, fill = Class),
+  upper = list(continuous = wrap("cor", size = 2.5)),
+  lower = list(continuous = wrap("points", alpha = 0.35, size = 0.5)),
+  diag  = list(continuous = wrap("densityDiag", alpha = 0.35)),
+  proportions = "auto"
+) +
+  scale_color_manual(values = c("Cammeo" = "#0072B2", "Osmancik" = "#D55E00")) +
+  scale_fill_manual(values = c("Cammeo" = "#0072B2", "Osmancik" = "#D55E00")) +
+  theme_bw(base_size = 8) +
+  theme(
+    strip.text = element_text(size = 7),
+    axis.text = element_text(size = 5),
+    axis.title = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 7),
+    panel.grid = element_blank()
+  )
+```
+
+This observation is important as it provides evidence for my hypothesis that QDA could potentially outperform other methods given a small dataset and classes with normally distributed predictors. The density plots also show a good degree of separation for certain predictors, suggesting that those variables (e.g., Area, Perimeter, and Major Axis Length) could be important predictors in predictive modeling. Stated differently, in some of the density plots the distributions do not overlap much which means that those predictors could be useful in classifying between the two rice varieties. EDA also revealed that several of the predictors are highly correlated (\> 0.85), which means that there is a strong linear relationship among those predictors. This could create redundancy in information conveyed by the highly correlated variables, lead to overfitting, reduced model interpretability, and instability in estimating model coefficients. This also suggests that variable selection may be necessary for certain machine learning techniques, such as logistic regression, to perform well.
+
+In the next phase of EDA, several preliminary models were fitted with the goal of narrowing down the list of predictors to include in subsequent models and identifying which are the most important variables. First, a logistic regression model with all the predictors was fitted and variance inflation factor (VIF) scores were calculated. A high VIF score (\>10) indicates that the corresponding predictor may be highly correlated with other variables in the model. The table below shows the high VIF scores and confirmed what I previously suspected from analyzing the scatterplot matrix.
+
+```{r echo=FALSE, fig.align='center'}
+# Convert row names to a proper column for display
+vif_display <- data.frame(
+  Predictor = rownames(vif_df),
+  VIF = vif_df[, 1]
+)
+
+# Clean predictor names
+vif_display$Predictor <- gsub("_", " ", vif_display$Predictor)
+
+# Print VIF scores table
+knitr::kable(
+  vif_display,
+  caption = "Variance Inflation Factor (VIF) for Logistic Regression Predictors.",
+  col.names = c("Predictor", "VIF"),
+  digits = 1,
+  align = c("l", "c"),
+  booktabs = TRUE
+)
+```
+Second, I performed backward variable selection using the Akaike Information Criterion (AIC), a commonly used criterion for model selection that tends to prefer more complex and flexible models. Using this approach, variable selection identified Area, Perimeter, Minor Axis Length, and Convex Area as predictors to include in a parsimonious model. The last step in EDA involved building random forest and XGBoost models and generating the variable importance plots shown below in Figures 3 and 4.
+```{r echo=FALSE, fig.align='center', fig.cap="Variable importance scores from the random forest model, measured by the mean decrease in Gini impurity. Higher values indicate predictors that contribute more strongly to classification performance."}
+# Extract variable importance values from random forest model
+importance_df <- as.data.frame(randomForest::importance(random_forest_model))
+importance_df$Variable <- rownames(importance_df)
+
+# Keep Mean Decrease Gini and clean variable names
+importance_df <- importance_df %>%
+  dplyr::select(MeanDecreaseGini, Variable) %>%
+  mutate(
+    Variable = dplyr::recode(
+      Variable,
+      Area = "Area",
+      Perimeter = "Perimeter",
+      Major_Axis_Length = "Major Axis Length",
+      Minor_Axis_Length = "Minor Axis Length",
+      Eccentricity = "Eccentricity",
+      Convex_Area = "Convex Area",
+      Extent = "Extent"
+    )
+  ) %>%
+  arrange(desc(MeanDecreaseGini))
+
+# Plot variable importance
+ggplot(importance_df,
+       aes(x = MeanDecreaseGini, y = reorder(Variable, MeanDecreaseGini))) +
+  geom_col(fill = "#0072B2") +
+  labs(
+    x = "Mean Decrease in Gini Impurity",
+    y = "Predictor"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r echo=FALSE, fig.align='center', fig.cap="Variable importance scores from the XGBoost model, measured by each predictor’s contribution to improving model performance during tree boosting. Higher values indicate predictors that contribute more strongly to classification accuracy."}
+# Fit finalized XGBoost workflow and extract variable importance
+xgb_importance_df <- boosted_fit %>%
+  fit(data = train) %>%
+  extract_fit_parsnip() %>%
+  vip::vi() %>%
+  mutate(
+    Variable = dplyr::recode(
+      Variable,
+      Area = "Area",
+      Perimeter = "Perimeter",
+      Major_Axis_Length = "Major Axis Length",
+      Minor_Axis_Length = "Minor Axis Length",
+      Eccentricity = "Eccentricity",
+      Convex_Area = "Convex Area",
+      Extent = "Extent"
+    )
+  ) %>%
+  arrange(desc(Importance))
+
+# Plot variable importance
+ggplot(
+  xgb_importance_df,
+  aes(x = Importance, y = reorder(Variable, Importance))
+) +
+  geom_col(fill = "#0072B2") +
+  labs(
+    x = "Importance",
+    y = "Predictor"
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid.minor = element_blank()
+  )
+```
+The variable importance plots from the random forest and XGBoost models consistently identified Major Axis Length and Perimeter as the two most important predictors for distinguishing between the rice varieties. Several other predictors related to grain size and shape, including Convex Area and Area, were also ranked highly by both models, suggesting that geometric measurements provide the strongest signal for classification.
+
+Although the tree-based models and backward variable selection broadly agreed on the importance of grain geometry, they did not identify exactly the same set of top predictors. Backward variable selection in the logistic regression model retained Area, Perimeter, Minor Axis Length, and Convex Area, whereas the random forest and XGBoost models emphasized Major Axis Length, Perimeter, Convex Area, and Area. This difference likely reflects the strong correlations among several size-related predictors observed during exploratory data analysis. In a linear modeling framework, correlated variables may compete with one another, leading one predictor to be retained while another closely related predictor is excluded. In contrast, tree-based models assess importance according to each variable’s contribution to reducing prediction error and may therefore prioritize different members of a correlated group of predictors.
+
+Overall, the results indicate strong agreement across modeling approaches that a small set of geometric features related to grain size and shape is sufficient to classify the two rice varieties accurately. At the same time, the differences between backward variable selection and tree-based importance rankings highlight that predictor importance depends in part on the modeling framework used to evaluate it.
+
+## Methods
+
+Table 3 below summarizes machine learning methods applied to the Turkish rice variety dataset in recent studies and in the present analysis.
+
+**Table 3.** Machine learning methods applied in this study and in previous research on Turkish rice variety classification.
+
+|   Model   |   This Study  |   2019   |   2021   |   2024   |
+|-----------|---------------|----------|----------|----------|
+| LR        | X             | X        |          | X        |
+| LDA       | X             |          |          | X        |
+| QDA       | X             |          |          |          |
+| DT        | X             | X        |          |          |
+| RF        | X             | X        |          | X        |
+| NB        |               | X        |          |          |
+| KNN       |               | X        |          | X        |
+| SVM       | X             | X        |          | X        |
+| XGB       | X             |          |          |          |
+| MLP       |               |          |          |          |
+| DNN       |               |          | X        |          |
+
+*Note:* LR = Logistic Regression, LDA = Linear Discriminant Analysis, QDA = Quadratic Discriminant Analysis, DT = Decision Tree, RF = Random Forest, NB = Naive Bayes, KNN = k-Nearest Neighbors, SVM = Support Vector Machine, XGB = Extreme Gradient Boosting, MLP = Multilayer Perceptron, DNN = Deep Neural Network.
+
+The dataset was split into 80% training and 20% test data. This differs slightly from the 70/30 and 75/25 splits used in prior studies but allows for greater training sample size while still maintaining an independent test set. This was deliberately done to determine whether similar performance results would be obtained despite slight changes in methodology. Rather than randomly splitting the data into training and test sets, stratified sampling was performed to maintain the slight imbalance in the class proportions.
+
+For logistic regression, linear discriminant analysis, and QDA, models were fit on the training set using the subset of predictors selected through backward variable selection (Area, Perimeter, Minor Axis Length, and Convex Area). Ten-fold cross-validation was then used to estimate model performance during training.
+
+Decision trees, random forest, XGBoost, and support vector machines are all data-centric machine learning methods that require model parameters to be tuned and adjusted to achieve optimal model performance. For these approaches, the specific methods used are described below.
+
+**Decision Tree**
+
+-   Grew a large tree with the training dataset.
+
+-   Performed 10-fold cross-validation to identify the optimal complexity parameter value.
+
+-   Pruned the DT back using the optimal complexity parameter.
+
+**Random Forest**
+
+-   Built a large RF model with many trees (trees = 2000).
+
+-   Inspected important variables.
+
+-   Performed 10-fold cross-validation to identify the optimal hyperparameters.
+
+ntree = number of trees to grow
+
+mtry = number of variables randomly sampled at each split
+
+min_n = minimum size of terminal node
+
+- Refit the RF model with optimal hyperparameters.
+
+**Extreme Gradient Boosting**
+
+- Created a model specification and specified tuning all hyperparameters except the number of trees.
+
+trees = 2000
+
+tree_depth = the maximum depth of the tree
+
+min_n = minimum size of terminal node
+
+sample_size = the number (or proportion) of data that is exposed to the fitting routine
+
+mtry = number of variables randomly sampled at each split
+
+learn_rate = the shrinkage factor between 0 and 1
+
+- Identified the optimal hyperparameters through an irregular grid search (Latin hypercube) and 10-fold cross-validation. An irregular grid search was performed because it is computationally less expensive than a regular grid search, which is an exhaustive approach that explores all possible combinations of hyperparameters. By strategically selecting specific combinations, an irregular grid search aims to achieve comparable performance while significantly reducing computational costs and time requirements.
+
+- Refit model with optimal hyperparameters.
+
+**Support Vector Machine**
+
+- Built a preliminary SVM model with all predictors scaled using a linear kernel.
+
+- Identified the optimal cost parameter value among a range of values (0.001 to 100) through 10-fold cross-validation.
+
+- Refit SVM model with optimal cost parameter value.
+
+Model performance was evaluated by comparing the 10-fold cross-validated accuracy on the training set and comparing accuracy, balanced accuracy, sensitivity, specificity, precision, and F1 score on the test set. Accuracy measured the overall correctness of the model's predictions, calculated as the proportion of correct predictions out of all predictions. Balanced accuracy provided a measure of model performance not affected by class imbalance and is the average of sensitivity and specificity. Sensitivity evaluated the model's ability to correctly identify instances of the positive class (Cammeo) and specificity evaluated the model's ability to correctly identify instances of the negative class (Osmancik). Precision measured the proportion of true positive predictions among all positive predictions made by the model. In other words, it answers the question: "Of all the instances predicted as positive, how many were actually positive?" F1 score is the harmonic mean of precision and recall and provides a balance between these two metrics. The F1 score ranges from 0 to 1, with higher values indicating better model performance. It is particularly useful when there is class imbalance in the data because it considers both false positives and false negatives. A high F1 score indicates that the model has both high precision and high recall, meaning it makes accurate positive predictions while minimizing false positives and false negatives.
+
+Finally, a robust assessment of model performance was performed through Monte Carlo cross-validation (100 iterations) which helped to evaluate if the differences in mean accuracy we observed were statistically meaningful. In Monte Carlo cross-validation, the dataset is randomly split into training and testing sets multiple times (iterations). For each iteration, a portion of the data is randomly selected for training the model, and the remaining portion is used for testing. This process is repeated for a specified number of iterations, and the model's performance is averaged over all iterations to obtain an overall estimate of its performance.
+
+Monte Carlo cross-validation differs from k-fold cross-validation in that it randomly selects training and test sets for each iteration, whereas k-fold cross-validation divides the dataset into k equally sized folds and uses each fold as the test set once, with the remaining data used for training. 
+
+Though Monte Carlo cross-validation can be computationally expensive compared to k-fold cross-validation, it was useful in this context because of the research objective to investigate model performance more thoroughly and because the dataset is small. 
+
+## Results
+
+On the test set, QDA achieved the highest balanced accuracy, sensitivity, and F1 score, and tied with linear discriminant analysis for the highest overall accuracy. QDA was followed closely by the other models in terms of balanced accuracy, accuracy, and F1 score. This analysis identified support vector machines, linear discriminant analysis, and logistic regression as top-performing models, consistent with the findings of Çinarer et al., who reported the same three methods as the most accurate classifiers. However, the results for QDA were somewhat surprising and seemed to confirm my initial hypothesis that QDA could perform quite well on this dataset. Another interesting observation from the results was that the best performing models also performed well in classifying Cammeo (i.e., sensitivity) but did not perform as well in classifying Osmancik (i.e., specificity). 
+
+```{r echo=FALSE, fig.align='center'}
+# Create summary table of model performance on test set.
+results_final_table <- data.frame(
+  Model = c("LR",
+            "LDA",
+            "QDA",
+            "DT",
+            "RF",
+            "XGB",
+            "SVM"),
+  accuracy_balanced = c(confusion_logistic_test[["byClass"]][["Balanced Accuracy"]], 
+                        confusion_lda_test[["byClass"]][["Balanced Accuracy"]], 
+                        confusion_qda_test[["byClass"]][["Balanced Accuracy"]], 
+                        confusion_tree_test[["byClass"]][["Balanced Accuracy"]], 
+                        confusion_forest_test[["byClass"]][["Balanced Accuracy"]],
+                        confusion_boost_test[["byClass"]][["Balanced Accuracy"]],
+                        confusion_svm_test[["byClass"]][["Balanced Accuracy"]]),
+  accuracy = c(confusion_logistic_test[["overall"]][["Accuracy"]], 
+               confusion_lda_test[["overall"]][["Accuracy"]], 
+               confusion_qda_test[["overall"]][["Accuracy"]], 
+               confusion_tree_test[["overall"]][["Accuracy"]], 
+               confusion_forest_test[["overall"]][["Accuracy"]],
+               confusion_boost_test[["overall"]][["Accuracy"]],
+               confusion_svm_test[["overall"]][["Accuracy"]]),
+  sensitivity = c(confusion_logistic_test[["byClass"]][["Sensitivity"]], 
+                  confusion_lda_test[["byClass"]][["Sensitivity"]], 
+                  confusion_qda_test[["byClass"]][["Sensitivity"]], 
+                  confusion_tree_test[["byClass"]][["Sensitivity"]], 
+                  confusion_forest_test[["byClass"]][["Sensitivity"]],
+                  confusion_boost_test[["byClass"]][["Sensitivity"]],
+                  confusion_svm_test[["byClass"]][["Sensitivity"]]),
+  specificity = c(confusion_logistic_test[["byClass"]][["Specificity"]], 
+                  confusion_lda_test[["byClass"]][["Specificity"]], 
+                  confusion_qda_test[["byClass"]][["Specificity"]], 
+                  confusion_tree_test[["byClass"]][["Specificity"]], 
+                  confusion_forest_test[["byClass"]][["Specificity"]],
+                  confusion_boost_test[["byClass"]][["Specificity"]],
+                  confusion_svm_test[["byClass"]][["Specificity"]]),
+  precision = c(confusion_logistic_test[["byClass"]][["Precision"]], 
+                confusion_lda_test[["byClass"]][["Precision"]], 
+                confusion_qda_test[["byClass"]][["Precision"]], 
+                confusion_tree_test[["byClass"]][["Precision"]], 
+                confusion_forest_test[["byClass"]][["Precision"]],
+                confusion_boost_test[["byClass"]][["Precision"]],
+                confusion_svm_test[["byClass"]][["Precision"]]),
+  F1 = c(confusion_logistic_test[["byClass"]][["F1"]], 
+         confusion_lda_test[["byClass"]][["F1"]], 
+         confusion_qda_test[["byClass"]][["F1"]], 
+         confusion_tree_test[["byClass"]][["F1"]], 
+         confusion_forest_test[["byClass"]][["F1"]],
+         confusion_boost_test[["byClass"]][["F1"]],
+         confusion_svm_test[["byClass"]][["F1"]])
+)
+
+# Round numeric columns to four digits
+results_final_table[, 2:7] <- round(results_final_table[, 2:7], digits = 4)
+
+# Identify the maximum values for each metric
+best_bal_acc <- max(results_final_table$accuracy_balanced)
+best_acc <- max(results_final_table$accuracy)
+best_sens <- max(results_final_table$sensitivity)
+best_spec <- max(results_final_table$specificity)
+best_prec <- max(results_final_table$precision)
+best_f1 <- max(results_final_table$F1)
+
+# Apply bold formatting
+results_display <- results_final_table
+
+results_display$accuracy_balanced <- ifelse(
+  results_display$accuracy_balanced == best_bal_acc,
+  paste0("\\textbf{", results_display$accuracy_balanced, "}"),
+  results_display$accuracy_balanced
+)
+
+results_display$accuracy <- ifelse(
+  results_display$accuracy == best_acc,
+  paste0("\\textbf{", results_display$accuracy, "}"),
+  results_display$accuracy
+)
+
+results_display$sensitivity <- ifelse(
+  results_display$sensitivity == best_sens,
+  paste0("\\textbf{", results_display$sensitivity, "}"),
+  results_display$sensitivity
+)
+
+results_display$specificity <- ifelse(
+  results_display$specificity == best_spec,
+  paste0("\\textbf{", results_display$specificity, "}"),
+  results_display$specificity
+)
+
+results_display$precision <- ifelse(
+  results_display$precision == best_prec,
+  paste0("\\textbf{", results_display$precision, "}"),
+  results_display$precision
+)
+
+results_display$F1 <- ifelse(
+  results_display$F1 == best_f1,
+  paste0("\\textbf{", results_display$F1, "}"),
+  results_display$F1
+)
+
+# Display the table
+kable(
+  results_display,
+  caption = "Classification model performance on the test set.",
+  col.names = c(
+    "Model",
+    "Balanced Accuracy",
+    "Accuracy",
+    "Sensitivity",
+    "Specificity",
+    "Precision",
+    "F1 Score"
+  ),
+  align = c("l", "c", "c", "c", "c", "c", "c"),
+  escape = FALSE
+)
+```
+Although evaluating model performance on previously unseen data (i.e., the test set) is essential, it is also useful to examine performance estimated through cross-validation during training. Table 5 compares the 10-fold cross-validated accuracy calculated on the training data with accuracy observed on the independent test set. Cross-validation is often used to select candidate models during training. In this analysis, support vector machines achieved the highest cross-validated accuracy, while QDA had the lowest cross-validated accuracy among the models considered. However, evaluation on the independent test set revealed that linear discriminant analysis and QDA achieved the highest accuracy, illustrating that cross-validated performance does not always perfectly predict test set performance. These results suggest that cross-validation slightly overestimated performance and that QDA demonstrated the strongest generalization, with the smallest gap between cross-validated and test accuracy.
+```{r echo=FALSE, fig.align='center'}
+# Create a copy for display
+accuracy_display <- accuracy_table
+
+# Abbreviate model names
+accuracy_display$Model <- dplyr::recode(
+  accuracy_display$Model,
+  "Logistic Regression" = "LR",
+  "Linear Discriminant Analysis" = "LDA",
+  "Quadratic Discriminant Analysis" = "QDA",
+  "Decision Tree" = "DT",
+  "Random Forest" = "RF",
+  "XGBoost" = "XGB",
+  "Support Vector Machine" = "SVM"
+)
+
+# Round numeric columns
+accuracy_display[, c("cv_accuracy", "test_accuracy", "test_minus_cv")] <-
+  round(accuracy_display[, c("cv_accuracy", "test_accuracy", "test_minus_cv")], 4)
+
+# Identify best values
+best_cv_acc <- max(accuracy_display$cv_accuracy)
+best_test_acc <- max(accuracy_display$test_accuracy)
+best_diff <- min(abs(accuracy_display$test_minus_cv))
+
+# Bold highest cross-validated accuracy
+accuracy_display$cv_accuracy <- ifelse(
+  accuracy_display$cv_accuracy == best_cv_acc,
+  paste0("\\textbf{", accuracy_display$cv_accuracy, "}"),
+  accuracy_display$cv_accuracy
+)
+
+# Bold highest test accuracy
+accuracy_display$test_accuracy <- ifelse(
+  accuracy_display$test_accuracy == best_test_acc,
+  paste0("\\textbf{", accuracy_display$test_accuracy, "}"),
+  accuracy_display$test_accuracy
+)
+
+# Bold lowest difference
+accuracy_display$test_minus_cv <- ifelse(
+  abs(accuracy_display$test_minus_cv) == best_diff,
+  paste0("\\textbf{", accuracy_display$test_minus_cv, "}"),
+  accuracy_display$test_minus_cv
+)
+
+# Display the table
+knitr::kable(
+  accuracy_display[, c("Model", "cv_accuracy", "test_accuracy", "test_minus_cv")],
+  caption = "Comparison of cross-validated training accuracy and independent test accuracy across classification models.",
+  col.names = c(
+    "Model",
+    "10-Fold CV Accuracy",
+    "Test Accuracy",
+    "Test − CV Difference"
+  ),
+  align = c("l", "c", "c", "c"),
+  escape = FALSE,
+  booktabs = TRUE
+)
+```
+The boxplots of Monte Carlo cross-validated performance performed on both the training and test sets shown below provided a more complete picture of how the models performed. Specifically, it showed that model accuracy varied less on the training set and varied considerably on the test set, which was expected given the small size of the test set and random selection. The boxplots also indicated that 100 iterations of Monte Carlo cross-validation seemed adequate for achieving normally distributed accuracy values. Together the mean accuracy values in the tables above and the mean accuracy values for Monte Carlo cross-validation shown as red dots in the boxplots indicated that on average the differences between the models and their performances were exceedingly small. 
+```{r echo=FALSE, fig.align='center', fig.cap="Monte Carlo cross-validation results across classification models based on 100 iterations. Boxplots show the distribution of training and test accuracy for each model, while red points indicate the mean accuracy across simulations."}
+# Ensure Train appears first and Test second
+accuracy_all_long$dataset <- factor(accuracy_all_long$dataset,
+                                    levels = c("Train", "Test"))
+
+# Order models by mean test accuracy
+model_order <- accuracy_all_long %>%
+  dplyr::filter(dataset == "Test") %>%
+  dplyr::group_by(model) %>%
+  dplyr::summarise(mean_acc = mean(accuracy)) %>%
+  dplyr::arrange(desc(mean_acc)) %>%
+  dplyr::pull(model)
+
+accuracy_all_long$model <- factor(accuracy_all_long$model, levels = model_order)
+
+# Plot box plots
+ggplot(accuracy_all_long, aes(x = model, y = accuracy, fill = dataset)) +
+  geom_boxplot(position = position_dodge(width = 0.75)) +
+  stat_summary(fun = mean,
+               geom = "point",
+               shape = 19,
+               size = 2,
+               color = "red",
+               position = position_dodge(width = 0.75)) +
+  labs(
+    x = "Model",
+    y = "Accuracy"
+  ) +
+  scale_fill_manual(values = c("Train" = "steelblue", "Test" = "orange")) +
+  scale_x_discrete(labels = c(
+    "Logistic.Regression" = "Logistic\nRegression",
+    "Linear.Discriminant.Analysis" = "LDA",
+    "Quadratic.Discriminant.Analysis" = "QDA",
+    "Decision.Tree" = "Tree",
+    "Random.Forest" = "Random\nForest",
+    "XGBoost" = "XGBoost",
+    "Support.Vector.Machine" = "SVM"
+  )) +
+  theme(
+    axis.text.x = element_text(size = 10),
+    legend.title = element_blank()
+  )
+```
+And although the differences in mean accuracy were small between the models, the table below revealed an important finding. The results in Table 6 below, which shows the p-values for paired t-tests that evaluated whether mean accuracy was statistically different between models, suggested that the mean accuracy for QDA was lower than logistic regression, linear discriminant analysis, and support vector machines. In each comparison between QDA and another model the p-value was zero which means that even though the difference in means is exceedingly small this difference is nevertheless statistically significant. This result was surprising because it contradicted earlier results that indicated that QDA was the among the best performing models. 
+
+```{r echo=FALSE, fig.align='center'}
+# Display the p-value table nicely using kable function with modified column names
+kable(t_test_table, caption = "Paired T test p-Values comparing mean accuracy.",
+      col.names = c("Model Comparison", "p-Value"))
+```
+
+## Conclusions
+
+In conclusion, this study explored the efficacy of QDA in classifying Turkish rice varieties compared to other machine learning methods. Notably, while QDA showed promise in initial assessments, subsequent statistical tests revealed lower accuracy compared to logistic regression, linear discriminant analysis, and support vector machine. These findings underscore the importance of rigorous evaluation and comparative analysis when assessing model performance. Moving forward, further research could delve into optimizing parameters, other variable selection techniques and exploring ensemble techniques to enhance classification accuracy. Overall, this study contributes to the ongoing discourse on machine learning applications in agricultural classification and highlights the nuanced evaluation required for informed decision-making. 
+
+## Reproducibility
+
+Source code and analysis are provided in the accompanying R Markdown file in this repository.  
+To reproduce results: install required packages (or use `renv`), place the dataset in `data/`, and knit the report.
+
+## References
+
+[1]  Mohidem, N. A., Hashim, N., Shamsudin, R., & Che Man, H. (2022). Rice for food security: Revisiting its production, diversity, rice milling process and nutrient content. Agriculture, 12(6), 741.
+
+[2]  Çinar, İ., & Köklü, M. (2019). Classification of rice varieties using artificial intelligence methods. International Journal of Intelligent Systems and Applications in Engineering, 7(3), 188–194. <https://doi.org/10.18201/ijisae.2019355381>.
+
+[3]  Koklu, M., Cinar, I., & Taspinar, Y. S. (2021). Classification of rice varieties with deep learning methods. Computers and electronics in agriculture, 187, 106285.
+
+[4]  Çınarer, G., Erbaş, N., & Öcal, A. (2024). Rice Classification and Quality Detection Success with Artificial Intelligence Technologies. Brazilian Archives of Biology and Technology, 67, e24220754.
+
+[5] James, G., Witten, D., Hastie, T., & Tibshirani, R. (2017). 
+An introduction to statistical learning: With applications in R. Springer.
+
+[6] Dua, D., & Graff, C. (2019). UCI machine learning repository. 
+University of California, Irvine, School of Information and Computer Sciences. 
+<https://archive.ics.uci.edu/>

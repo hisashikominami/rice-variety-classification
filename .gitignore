@@ -1,0 +1,16 @@
+# RStudio files
+.Rhistory
+.RData
+.Ruserdata
+.Rproj.user/
+
+# knitr / R Markdown cache
+*_cache/
+*_files/
+
+# LaTeX build files
+*.aux
+*.log
+*.out
+*.toc
+*.tex
