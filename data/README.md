@@ -1,12 +1,8 @@
 # Dataset Description
 
-The dataset used in this project was obtained from the **UCI Machine Learning Repository**.
+The dataset used in this project was obtained from the **UCI Machine Learning Repository**. It contains **3,810 observations** and **seven continuous predictors** describing morphological features of rice grains extracted from images.
 
-Dataset: _Rice (Cammeo and Osmancik)_
-
-It contains **3,810 observations** and **seven continuous predictors** describing morphological characteristics of rice grains extracted from images.
-
-The dataset is used to classify two rice varieties:
+The dataset is used to classify two Turkish rice varieties:
 
 - Cammeo
 - Osmancik
