@@ -38,12 +38,14 @@ Model performance was evaluated using:
 
 ## Repository Structure
 
+```
 rice-variety-classification/
 ├── rice-variety-classification.Rmd # Full analysis
 ├── rice-variety-classification.pdf # Final report
 ├── rice-variety-classification.Rproj # RStudio project file
 └── data/
 └── Rice_Cammeo_Osmancik.arff # Dataset used in analysis
+```
 
 ## Data Source
 
